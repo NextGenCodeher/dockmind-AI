@@ -1,4 +1,4 @@
-pymupdf
+streamlit
+PyMuPDF
 jinja2
 playwright
-streamlit
