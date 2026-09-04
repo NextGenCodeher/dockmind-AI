@@ -53,7 +53,7 @@ def get_default_latex_template() -> str:
 
 
 # -----------------------------------------------------------------------------
-# STEP 1: PARSE REFERENCE PDF & BUILD DYNAMIC LATEX TEMPLATE (FIXED)
+# STEP 1: PARSE REFERENCE PDF & BUILD DYNAMIC LATEX TEMPLATE
 # -----------------------------------------------------------------------------
 def extract_latex_template_from_pdf(uploaded_file) -> str:
     """Analyzes reference PDF geometry and typography to construct a LaTeX template shell."""
@@ -163,31 +163,40 @@ def extract_latex_template_from_pdf(uploaded_file) -> str:
 
 
 # -----------------------------------------------------------------------------
-# HELPER: MARKDOWN TO LATEX CONVERTER
+# HELPER: MARKDOWN TO LATEX CONVERTER (FIXED FOR SPECIAL CHARACTERS)
 # -----------------------------------------------------------------------------
 def markdown_to_latex(text: str) -> str:
     if not text:
         return ""
 
-    # Escape raw special LaTeX characters
-    text = text.replace("&", r"\&").replace("%", r"\%").replace("$", r"\$")
+    # 1. Escape LaTeX special reserved characters in sequence
+    # Backslash must be handled first to prevent escaping double-escapes
+    text = text.replace("\\", r"\textbackslash{}")
+    text = text.replace("&", r"\&")
+    text = text.replace("%", r"\%")
+    text = text.replace("$", r"\$")
+    text = text.replace("#", r"\#")
+    text = text.replace("_", r"\_")
+    text = text.replace("~", r"\textasciitilde{}")
+    text = text.replace("^", r"\textasciicircum{}")
 
-    # Headings
+    # 2. Headings
     text = re.sub(r"^###\s+(.*$)", r"\\subsubsection*{\1}", text, flags=re.M)
     text = re.sub(r"^##\s+(.*$)", r"\\subsection*{\1}", text, flags=re.M)
     text = re.sub(r"^#\s+(.*$)", r"\\section*{\1}", text, flags=re.M)
 
-    # Bold & Italics
+    # 3. Bold & Italics
     text = re.sub(r"\*\*(.*?)\*\*", r"\\textbf{\1}", text)
-    text = re.sub(r"\*(.*?)\*", r"\\italic{\1}", text)
+    text = re.sub(r"\*(.*?)\*", r"\\textit{\1}", text)
 
-    # Bullet lists
+    # 4. Bullet lists
     lines = text.split("\n")
     in_list = False
     new_lines = []
     for line in lines:
-        if line.strip().startswith("- ") or line.strip().startswith("* "):
-            item = line.strip()[2:]
+        stripped = line.strip()
+        if stripped.startswith("- ") or stripped.startswith("* "):
+            item = stripped[2:]
             if not in_list:
                 new_lines.append(r"\begin{itemize}")
                 in_list = True
