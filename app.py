@@ -1,153 +1,236 @@
 import os
-import subprocess
-import json
+import fitz  # PyMuPDF
 import streamlit as st
 from jinja2 import Template
 from playwright.sync_api import sync_playwright
 
-# Ensure Playwright browser is installed in Streamlit Cloud environment
-@st.cache_resource
-def install_playwright_browsers():
-    subprocess.run(["playwright", "install", "chromium"])
+# Ensure output folder exists for compiled PDFs
+OUTPUT_DIR = "output"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-try:
-    install_playwright_browsers()
-except Exception as e:
-    st.warning(f"Browser setup: {e}")
 
-st.set_page_config(page_title="DocMind AI - Chat PDF Generator", layout="centered", page_icon="💬")
+# -----------------------------------------------------------------------------
+# 1. TEMPLATE PARSER & INLINE CSS ENGINE
+# -----------------------------------------------------------------------------
+def extract_template_styles(uploaded_file) -> str:
+    """
+    Parses an uploaded PDF/DOCX file to extract page layout, font sizes,
+    and primary colors, returning dynamic CSS string.
+    """
+    try:
+        file_bytes = uploaded_file.read()
+        uploaded_file.seek(0)  # Reset file pointer
+        
+        # Default fallback values
+        font_family = "Arial, sans-serif"
+        primary_color = "#111111"
+        font_size = "11pt"
+        line_height = "1.6"
+        margin_mm = "20mm"
 
-st.title("💬 DocMind AI: Chat Interface")
-st.caption("Upload a reference PDF and describe the changes or contents you want in plain text.")
+        # Parse uploaded PDF template attributes
+        if uploaded_file.name.endswith(".pdf"):
+            doc = fitz.open(stream=file_bytes, filetype="pdf")
+            if len(doc) > 0:
+                page = doc[0]
+                blocks = page.get_text("dict")["blocks"]
+                for b in blocks:
+                    if "lines" in b:
+                        for line in b["lines"]:
+                            for span in line["spans"]:
+                                font_family = span.get("font", font_family)
+                                font_size = f"{round(span.get('size', 11))}pt"
+                                color_int = span.get("color", 0)
+                                primary_color = f"#{color_int:06x}"
+                                break
+                            if font_size:
+                                break
 
-# Default document state
-if "doc_data" not in st.session_state:
-    st.session_state.doc_data = {
-        "header": "DEPARTMENT OF COMPUTER SCIENCE & ENGINEERING",
-        "date": "September 5, 2026",
-        "address": "The Principal\nG. Pulla Reddy Engineering College\nKurnool",
-        "subject": "Request for Lab Resources",
-        "salutation": "Respected Sir",
-        "paragraphs": "I am writing to request access to the machine learning laboratory for our research project.\n\nWe plan to run multi-node workload experiments starting next week.",
-        "sign_off": "Yours faithfully",
-        "sender_name": "Honey Amilineni",
-        "sender_title": "Student Lead, CSE"
-    }
+        # Build dynamic CSS injection rules
+        return f"""
+        @page {{
+            size: A4;
+            margin: {margin_mm};
+        }}
+        body {{
+            font-family: '{font_family}', sans-serif;
+            font-size: {font_size};
+            line-height: {line_height};
+            color: {primary_color};
+            margin: 0;
+            padding: 0;
+        }}
+        .header {{
+            text-align: center;
+            font-weight: bold;
+            font-size: 16pt;
+            margin-bottom: 25px;
+            color: {primary_color};
+            border-bottom: 2px solid {primary_color};
+            padding-bottom: 8px;
+        }}
+        .date {{
+            text-align: right;
+            margin-bottom: 20px;
+            font-weight: bold;
+        }}
+        .address {{
+            margin-bottom: 20px;
+            line-height: 1.4;
+        }}
+        .subject {{
+            font-weight: bold;
+            text-decoration: underline;
+            margin-top: 15px;
+            margin-bottom: 20px;
+        }}
+        .body-paragraph {{
+            text-align: justify;
+            text-indent: 30px;
+            margin-bottom: 15px;
+        }}
+        .signature {{
+            margin-top: 50px;
+            float: right;
+            text-align: left;
+        }}
+        """
 
-if "messages" not in st.session_state:
-    st.session_state.messages = [
-        {"role": "assistant", "content": "Hello! Upload a reference template if you'd like, or tell me what changes or content you'd like in your letter."}
-    ]
+    except Exception as e:
+        st.warning(f"Could not extract styles from template ({e}). Using default styles.")
+        return get_default_css()
 
-# HTML Template Definition
-HTML_TEMPLATE_STRING = """
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<style>
-  @page { size: A4; margin: 20mm; }
-  body { font-family: 'Times New Roman', Times, serif; font-size: 12pt; line-height: 1.6; color: #000; }
-  .header { text-align: center; font-weight: bold; font-size: 14pt; text-transform: uppercase; margin-bottom: 25px; }
-  .date { text-align: right; margin-bottom: 20px; font-weight: bold; }
-  .address { margin-bottom: 20px; }
-  .subject { font-weight: bold; text-decoration: underline; margin-top: 15px; margin-bottom: 20px; }
-  .salutation { margin-bottom: 15px; }
-  .body-paragraph { text-align: justify; text-indent: 40px; margin-bottom: 15px; }
-  .closing { margin-top: 40px; }
-  .signature { margin-top: 50px; }
-</style>
-</head>
-<body>
-  <div class="header">{{ content.header }}</div>
-  <div class="date">Date: {{ content.date }}</div>
-  <div class="address">
-    <b>To,</b><br>
-    {% for line in content.address.split('\n') %}{{ line }}<br>{% endfor %}
-  </div>
-  <div class="subject">Subject: {{ content.subject }}</div>
-  <div class="salutation">{{ content.salutation }},</div>
-  {% for p in content.paragraphs.split('\n\n') %}
-    <div class="body-paragraph">{{ p }}</div>
-  {% endfor %}
-  <div class="closing">Thanking you,<br>{{ content.sign_off }},</div>
-  <div class="signature">
-    <b>{{ content.sender_name }}</b><br>
-    {{ content.sender_title }}
-  </div>
-</body>
-</html>
-"""
 
-def generate_pdf(content_data, output_path="generated_letter.pdf"):
-    template = Template(HTML_TEMPLATE_STRING)
+def get_default_css() -> str:
+    """Inline default CSS fallback string."""
+    return """
+    @page { size: A4; margin: 20mm; }
+    body { font-family: 'Times New Roman', serif; font-size: 12pt; line-height: 1.5; color: #111111; margin: 0; padding: 0; }
+    .header { text-align: center; font-weight: bold; font-size: 16pt; margin-bottom: 20px; border-bottom: 1px solid #333; padding-bottom: 8px; }
+    .date { text-align: right; margin-bottom: 15px; font-weight: bold; }
+    .address { margin-bottom: 20px; line-height: 1.4; }
+    .subject { font-weight: bold; text-decoration: underline; margin: 15px 0; }
+    .body-paragraph { text-align: justify; text-indent: 30px; margin-bottom: 12px; }
+    .signature { margin-top: 40px; float: right; }
+    """
+
+
+# -----------------------------------------------------------------------------
+# 2. PDF RENDERING ENGINE
+# -----------------------------------------------------------------------------
+def generate_pdf(content_data: dict, custom_css: str, output_path: str = "output/generated_doc.pdf") -> str:
+    """Compiles HTML with dynamic CSS and converts to PDF via Playwright."""
+    html_structure = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta charset="UTF-8">
+    <style>
+      {custom_css}
+    </style>
+    </head>
+    <body>
+      <div class="header">{{{{ content.header }}}}</div>
+      <div class="date"><b>Date:</b> {{{{ content.date }}}}</div>
+      <div class="address">
+        <b>To,</b><br>
+        {{% for line in content.address.split('\\n') %}}
+          {{{{ line }}}}<br>
+        {{% endfor %}}
+      </div>
+      <div class="subject">Subject: {{{{ content.subject }}}}</div>
+      <div style="margin-bottom: 15px;">{{{{ content.salutation }}}},</div>
+      
+      {{% for p in content.paragraphs.split('\\n\\n') %}}
+        <div class="body-paragraph">{{{{ p }}}}</div>
+      {{% endfor %}}
+      
+      <div class="signature">
+        <b>{{{{ content.sender_name }}}}</b><br>
+        {{{{ content.sender_title }}}}
+      </div>
+    </body>
+    </html>
+    """
+    
+    # Render Jinja2 HTML template
+    template = Template(html_structure)
     rendered_html = template.render(content=content_data)
 
+    # Render PDF using Chromium via Playwright
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.set_content(rendered_html)
-        page.pdf(path=output_path, format="A4", print_background=True)
+        page.pdf(path=output_path, print_background=True, format="A4")
         browser.close()
+
     return output_path
 
-# File Upload Sidebar / Top section
-uploaded_file = st.file_uploader("📎 Upload PDF Reference Template", type=["pdf"])
-if uploaded_file:
-    st.info(f"Loaded reference template: `{uploaded_file.name}`")
 
-# Display Chat History
-for msg in st.session_state.messages:
-    with st.chat_message(msg["role"]):
-        st.write(msg["content"])
-        if "pdf_path" in msg:
-            with open(msg["pdf_path"], "rb") as f:
-                st.download_button(
-                    label="📥 Download Generated PDF",
-                    data=f.read(),
-                    file_name="generated_document.pdf",
-                    mime="application/pdf",
-                    key=msg["pdf_path"]
-                )
+# -----------------------------------------------------------------------------
+# 3. STREAMLIT UI DASHBOARD
+# -----------------------------------------------------------------------------
+def main():
+    st.set_page_config(page_title="DocMind AI - Dynamic Formatter", layout="wide")
+    st.title("📄 DocMind AI: Template-Aware Document Generator")
+    st.write("Upload a target PDF template to extract typography, margins, and styling onto your generated document.")
 
-# Chat Input
-user_input = st.chat_input("E.g., Change date to Oct 10 and update subject to Machine Learning Lab Access")
+    col1, col2 = st.columns([1, 1])
 
-if user_input:
-    # Render user prompt
-    st.session_state.messages.append({"role": "user", "content": user_input})
-    with st.chat_message("user"):
-        st.write(user_input)
+    with col1:
+        st.subheader("1. Template & Document Ingestion")
+        uploaded_template = st.file_uploader("Upload Sample PDF Template", type=["pdf", "docx"])
+        
+        # Check for uploaded template and generate corresponding CSS
+        if uploaded_template:
+            st.success(f"Template Loaded: `{uploaded_template.name}`")
+            active_css = extract_template_styles(uploaded_template)
+            with st.expander("View Dynamic Extracted CSS"):
+                st.code(active_css, language="css")
+        else:
+            st.info("No template uploaded. Default styling active.")
+            active_css = get_default_css()
 
-    # Process input & render response
-    with st.chat_message("assistant"):
-        with st.spinner("Updating document and generating PDF..."):
+        st.subheader("2. Document Content")
+        header = st.text_input("Document Header / Institution Name", "G. Pulla Reddy Engineering College")
+        date_str = st.text_input("Date", "05/09/2026")
+        address = st.text_area("Recipient Address", "To The Head of Department,\nDepartment of CSE (AIML),\nKurnool, AP.")
+        subject = st.text_input("Subject", "Submission of Project Architecture Draft for DocMind AI")
+        salutation = st.text_input("Salutation", "Respected Sir/Madam")
+        paragraphs = st.text_area("Body Content (Separate paragraphs with double newlines)", 
+            "DocMind AI is an automated technical document synthesis platform designed to streamline writing and template formatting simultaneously.\n\n"
+            "It ingests source artifacts—including code repositories, configuration files, schema files, and READMEs—ensuring all generated text remains grounded without hallucinated details."
+        )
+        sender_name = st.text_input("Sender Name", "Honey Amilineni")
+        sender_title = st.text_input("Sender Designation", "Lead AI Engineer & Student")
+
+    with col2:
+        st.subheader("3. Document Generation & Export")
+        
+        if st.button("Generate & Apply Template", type="primary"):
+            doc_payload = {
+                "header": header,
+                "date": date_str,
+                "address": address,
+                "subject": subject,
+                "salutation": salutation,
+                "paragraphs": paragraphs,
+                "sender_name": sender_name,
+                "sender_title": sender_title
+            }
             
-            # Simple keyword parsing demo to update document state
-            text_lower = user_input.lower()
-            if "subject" in text_lower:
-                st.session_state.doc_data["subject"] = user_input.replace("subject", "").strip(" :")
-            if "date" in text_lower:
-                st.session_state.doc_data["date"] = user_input.replace("date", "").strip(" :")
-            if "body" in text_lower or "paragraph" in text_lower:
-                st.session_state.doc_data["paragraphs"] = user_input
+            with st.spinner("Extracting layout styles and compiling PDF..."):
+                output_pdf = generate_pdf(doc_payload, custom_css=active_css)
+                st.success("Document compiled successfully!")
+                
+                with open(output_pdf, "rb") as pdf_file:
+                    st.download_button(
+                        label="📥 Download Formatted PDF",
+                        data=pdf_file,
+                        file_name="DocMind_Formatted_Document.pdf",
+                        mime="application/pdf"
+                    )
 
-            pdf_file = generate_pdf(st.session_state.doc_data, output_path=f"output_{len(st.session_state.messages)}.pdf")
-            
-            response_text = "I've updated your document based on your request and rendered the new PDF!"
-            st.write(response_text)
-            
-            with open(pdf_file, "rb") as f:
-                pdf_bytes = f.read()
-                st.download_button(
-                    label="📥 Download Updated PDF",
-                    data=pdf_bytes,
-                    file_name="generated_document.pdf",
-                    mime="application/pdf"
-                )
-
-            st.session_state.messages.append({
-                "role": "assistant",
-                "content": response_text,
-                "pdf_path": pdf_file
-            })
+if __name__ == "__main__":
+    main()
