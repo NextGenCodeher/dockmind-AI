@@ -53,13 +53,16 @@ def get_default_latex_template() -> str:
 
 
 # -----------------------------------------------------------------------------
-# STEP 1: PARSE REFERENCE PDF & BUILD DYNAMIC LATEX TEMPLATE
+# STEP 1: PARSE REFERENCE PDF & BUILD DYNAMIC LATEX TEMPLATE (FIXED)
 # -----------------------------------------------------------------------------
 def extract_latex_template_from_pdf(uploaded_file) -> str:
     """Analyzes reference PDF geometry and typography to construct a LaTeX template shell."""
+    doc = None
     try:
         file_bytes = uploaded_file.read()
         uploaded_file.seek(0)
+        
+        # PyMuPDF document initialization
         doc = fitz.open(stream=file_bytes, filetype="pdf")
 
         if len(doc) == 0:
@@ -154,6 +157,9 @@ def extract_latex_template_from_pdf(uploaded_file) -> str:
     except Exception as e:
         st.error(f"Error parsing reference PDF template: {e}")
         return get_default_latex_template()
+    finally:
+        if doc is not None:
+            doc.close()
 
 
 # -----------------------------------------------------------------------------
