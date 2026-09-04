@@ -192,18 +192,6 @@ def main():
             st.info("No template uploaded. Default styling active.")
             active_css = get_default_css()
 
-        st.subheader("2. Document Content")
-        header = st.text_input("Document Header / Institution Name", "G. Pulla Reddy Engineering College")
-        date_str = st.text_input("Date", "05/09/2026")
-        address = st.text_area("Recipient Address", "To The Head of Department,\nDepartment of CSE (AIML),\nKurnool, AP.")
-        subject = st.text_input("Subject", "Submission of Project Architecture Draft for DocMind AI")
-        salutation = st.text_input("Salutation", "Respected Sir/Madam")
-        paragraphs = st.text_area("Body Content (Separate paragraphs with double newlines)", 
-            "DocMind AI is an automated technical document synthesis platform designed to streamline writing and template formatting simultaneously.\n\n"
-            "It ingests source artifacts—including code repositories, configuration files, schema files, and READMEs—ensuring all generated text remains grounded without hallucinated details."
-        )
-        sender_name = st.text_input("Sender Name", "Honey Amilineni")
-        sender_title = st.text_input("Sender Designation", "Lead AI Engineer & Student")
 
     with col2:
         st.subheader("3. Document Generation & Export")
