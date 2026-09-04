@@ -61,8 +61,8 @@ def extract_latex_template_from_pdf(uploaded_file) -> str:
     try:
         file_bytes = uploaded_file.read()
         uploaded_file.seek(0)
-        
-        # PyMuPDF document initialization
+
+        # Initialize PyMuPDF document
         doc = fitz.open(stream=file_bytes, filetype="pdf")
 
         if len(doc) == 0:
@@ -122,35 +122,35 @@ def extract_latex_template_from_pdf(uploaded_file) -> str:
             elif avg_body_size >= 12:
                 base_size = "12pt"
 
-        # Construct Dynamic LaTeX Template Shell
-        latex_template = rf"""\documentclass[{column_option}{base_size},a4paper]{{article}}
-\usepackage[utf8]{{inputenc}}
-\usepackage[top={margin_top},bottom={margin_bottom},left={margin_left},right={margin_right}]{{geometry}}
-\usepackage{{microtype}}
-\usepackage{{titlesec}}
-\usepackage{{abstract}}
-\usepackage{{hyperref}}
+        # Escaped double braces {{...}} produce literal single braces {...} in output
+        latex_template = f"""\\documentclass[{column_option}{base_size},a4paper]{{article}}
+\\usepackage[utf8]{{inputenc}}
+\\usepackage[top={margin_top},bottom={margin_bottom},left={margin_left},right={margin_right}]{{geometry}}
+\\usepackage{{microtype}}
+\\usepackage{{titlesec}}
+\\usepackage{{abstract}}
+\\usepackage{{hyperref}}
 
-\titleformat{{\section}}{{\large\bfseries\uppercase}}{{}}{{0pt}}{{}}[\titlerule]
-\titleformat{{\subsection}}{{\normalfont\bfseries}}{{}}{{0pt}}{{}}
+\\titleformat{{\\section}}{{\\large\\bfseries\\uppercase}}{{}}{{0pt}}{{}}[\\titlerule]
+\\titleformat{{\\subsection}}{{\\normalfont\\bfseries}}{{}}{{0pt}}{{}}
 
-\title{{\textbf{{{{TITLE}}}}}}
-\date{{}}
+\\title{{\\textbf{{{{{{TITLE}}}}}}}}
+\\date{{}}
 
-\begin{document}
+\\begin{{document}}
 
-\twocolumn[
-  \begin{maketitle}
-  \end{maketitle}
-  \begin{abstract}
-  \noindent {{{{ABSTRACT}}}}
-  \end{abstract}
-  \vspace{{1.5em}}
+\\twocolumn[
+  \\begin{{maketitle}}
+  \\end{{maketitle}}
+  \\begin{{abstract}}
+  \\noindent {{{{{{ABSTRACT}}}}}}
+  \\end{{abstract}}
+  \\vspace{{1.5em}}
 ]
 
-{{{{BODY_CONTENT}}}}
+{{{{{{BODY_CONTENT}}}}}}
 
-\end{document}
+\\end{{document}}
 """
         return latex_template
 
@@ -238,7 +238,6 @@ def render_pdf_with_latex(latex_code: str, output_filename: str) -> bool:
         with open(tex_filename, "w", encoding="utf-8") as f:
             f.write(latex_code)
 
-        # Run pdflatex command
         cmd = [
             "pdflatex",
             "-interaction=nonstopmode",
@@ -254,13 +253,13 @@ def render_pdf_with_latex(latex_code: str, output_filename: str) -> bool:
             return True
         else:
             st.error(
-                "LaTeX Compilation Error. Please ensure special LaTeX characters are properly formatted."
+                "LaTeX Compilation Error. Please check syntax or special characters."
             )
             return False
 
     except Exception as e:
         st.error(
-            f"Failed to execute pdflatex binary: {e}. Ensure `texlive-latex-base` is installed in packages.txt."
+            f"Failed to execute pdflatex binary: {e}. Ensure LaTeX packages are installed in packages.txt."
         )
         return False
 
@@ -282,7 +281,7 @@ def main():
     if "latex_template" not in st.session_state:
         st.session_state.latex_template = get_default_latex_template()
 
-    # --- SIDEBAR: STEP 1 (UPLOAD & EXTRACT TEMPLATE) ---
+    # --- SIDEBAR: STEP 1 ---
     with st.sidebar:
         st.header("Step 1: Input Reference PDF")
         uploaded_file = st.file_uploader(
@@ -300,7 +299,7 @@ def main():
         with st.expander("🔍 View Generated LaTeX Shell"):
             st.code(st.session_state.latex_template, language="latex")
 
-    # --- MAIN CHAT INTERFACE: STEP 2 (REPLACE CONTENT & COMPILE) ---
+    # --- MAIN CHAT INTERFACE: STEP 2 ---
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
@@ -327,7 +326,6 @@ def main():
                 abstract_latex = markdown_to_latex(abstract)
                 body_latex = markdown_to_latex(body_markdown)
 
-                # Inject parsed chat content into the extracted LaTeX template placeholders
                 final_latex = (
                     st.session_state.latex_template.replace(
                         "{{TITLE}}", title_latex
