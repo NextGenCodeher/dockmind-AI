@@ -2,3 +2,4 @@ streamlit
 PyMuPDF
 jinja2
 playwright
+markdown
