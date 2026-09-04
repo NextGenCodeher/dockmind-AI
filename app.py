@@ -1,5 +1,6 @@
 import os
 import subprocess
+import json
 import streamlit as st
 from jinja2 import Template
 from playwright.sync_api import sync_playwright
@@ -12,13 +13,33 @@ def install_playwright_browsers():
 try:
     install_playwright_browsers()
 except Exception as e:
-    st.warning(f"Browser installation step: {e}")
+    st.warning(f"Browser setup: {e}")
 
-st.set_page_config(page_title="DocMind AI - PDF Generator", layout="wide", page_icon="📄")
+st.set_page_config(page_title="DocMind AI - Chat PDF Generator", layout="centered", page_icon="💬")
 
-st.title("📄 DocMind AI: PDF Document Generator")
-st.write("Upload a template PDF for reference and customize content fields to generate a formatted document.")
+st.title("💬 DocMind AI: Chat Interface")
+st.caption("Upload a reference PDF and describe the changes or contents you want in plain text.")
 
+# Default document state
+if "doc_data" not in st.session_state:
+    st.session_state.doc_data = {
+        "header": "DEPARTMENT OF COMPUTER SCIENCE & ENGINEERING",
+        "date": "September 5, 2026",
+        "address": "The Principal\nG. Pulla Reddy Engineering College\nKurnool",
+        "subject": "Request for Lab Resources",
+        "salutation": "Respected Sir",
+        "paragraphs": "I am writing to request access to the machine learning laboratory for our research project.\n\nWe plan to run multi-node workload experiments starting next week.",
+        "sign_off": "Yours faithfully",
+        "sender_name": "Honey Amilineni",
+        "sender_title": "Student Lead, CSE"
+    }
+
+if "messages" not in st.session_state:
+    st.session_state.messages = [
+        {"role": "assistant", "content": "Hello! Upload a reference template if you'd like, or tell me what changes or content you'd like in your letter."}
+    ]
+
+# HTML Template Definition
 HTML_TEMPLATE_STRING = """
 <!DOCTYPE html>
 <html>
@@ -58,7 +79,7 @@ HTML_TEMPLATE_STRING = """
 </html>
 """
 
-def generate_pdf(content_data, output_path="final_letter_output.pdf"):
+def generate_pdf(content_data, output_path="generated_letter.pdf"):
     template = Template(HTML_TEMPLATE_STRING)
     rendered_html = template.render(content=content_data)
 
@@ -70,57 +91,63 @@ def generate_pdf(content_data, output_path="final_letter_output.pdf"):
         browser.close()
     return output_path
 
-col1, col2 = st.columns([1, 1])
+# File Upload Sidebar / Top section
+uploaded_file = st.file_uploader("📎 Upload PDF Reference Template", type=["pdf"])
+if uploaded_file:
+    st.info(f"Loaded reference template: `{uploaded_file.name}`")
 
-with col1:
-    st.subheader("📝 Input Template & Content")
-    
-    uploaded_pdf = st.file_uploader("Upload Reference Template PDF (Optional)", type=["pdf"])
-    if uploaded_pdf:
-        st.info(f"Loaded reference: {uploaded_pdf.name}")
-
-    header = st.text_input("Department / Organization Header", "DEPARTMENT OF COMPUTER SCIENCE & ENGINEERING")
-    date_str = st.text_input("Date", "September 5, 2026")
-    address = st.text_area("To Address (One line per row)", "The Principal\nG. Pulla Reddy Engineering College\nKurnool")
-    subject = st.text_input("Subject", "Request for Lab Resources")
-    salutation = st.text_input("Salutation", "Respected Sir")
-    paragraphs = st.text_area("Body Content (Separate paragraphs with blank lines)", 
-                              "I am writing to request access to the machine learning laboratory for our research project.\n\nWe plan to run multi-node workload experiments starting next week.")
-    sign_off = st.text_input("Sign Off", "Yours faithfully")
-    sender_name = st.text_input("Sender Name", "Honey Amilineni")
-    sender_title = st.text_input("Sender Title", "Student Lead, CSE")
-
-    generate_btn = st.button("🚀 Generate PDF", type="primary", use_container_width=True)
-
-with col2:
-    st.subheader("📥 Output Document")
-    if generate_btn:
-        content_payload = {
-            "header": header,
-            "date": date_str,
-            "address": address,
-            "subject": subject,
-            "salutation": salutation,
-            "paragraphs": paragraphs,
-            "sign_off": sign_off,
-            "sender_name": sender_name,
-            "sender_title": sender_title
-        }
-        
-        with st.spinner("Rendering PDF via Playwright..."):
-            try:
-                pdf_file = generate_pdf(content_payload)
-                st.success("PDF generated successfully!")
-                
-                with open(pdf_file, "rb") as f:
-                    pdf_bytes = f.read()
-                    
+# Display Chat History
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.write(msg["content"])
+        if "pdf_path" in msg:
+            with open(msg["pdf_path"], "rb") as f:
                 st.download_button(
-                    label="⬇️ Download Output PDF",
-                    data=pdf_bytes,
-                    file_name="generated_letter.pdf",
+                    label="📥 Download Generated PDF",
+                    data=f.read(),
+                    file_name="generated_document.pdf",
                     mime="application/pdf",
-                    use_container_width=True
+                    key=msg["pdf_path"]
                 )
-            except Exception as e:
-                st.error(f"Failed to generate PDF: {e}")
+
+# Chat Input
+user_input = st.chat_input("E.g., Change date to Oct 10 and update subject to Machine Learning Lab Access")
+
+if user_input:
+    # Render user prompt
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    with st.chat_message("user"):
+        st.write(user_input)
+
+    # Process input & render response
+    with st.chat_message("assistant"):
+        with st.spinner("Updating document and generating PDF..."):
+            
+            # Simple keyword parsing demo to update document state
+            text_lower = user_input.lower()
+            if "subject" in text_lower:
+                st.session_state.doc_data["subject"] = user_input.replace("subject", "").strip(" :")
+            if "date" in text_lower:
+                st.session_state.doc_data["date"] = user_input.replace("date", "").strip(" :")
+            if "body" in text_lower or "paragraph" in text_lower:
+                st.session_state.doc_data["paragraphs"] = user_input
+
+            pdf_file = generate_pdf(st.session_state.doc_data, output_path=f"output_{len(st.session_state.messages)}.pdf")
+            
+            response_text = "I've updated your document based on your request and rendered the new PDF!"
+            st.write(response_text)
+            
+            with open(pdf_file, "rb") as f:
+                pdf_bytes = f.read()
+                st.download_button(
+                    label="📥 Download Updated PDF",
+                    data=pdf_bytes,
+                    file_name="generated_document.pdf",
+                    mime="application/pdf"
+                )
+
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": response_text,
+                "pdf_path": pdf_file
+            })
