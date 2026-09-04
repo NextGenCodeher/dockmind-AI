@@ -103,8 +103,8 @@ def convert_pdf_template(input_pdf, content_data, output_pdf):
 
     template = Template(HTML_TEMPLATE_STRING)
     rendered_html = template.render(
-        width=page_w,
-        height=page_h,
+        width=round(page_w),
+        height=round(page_h),
         layout=layout_map,
         content=content_data
     )
@@ -113,7 +113,14 @@ def convert_pdf_template(input_pdf, content_data, output_pdf):
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.set_content(rendered_html)
-        page.pdf(path=output_pdf, width=f"{page_w}pt", height=f"{page_h}pt", margin={"top": "0", "right": "0", "bottom": "0", "left": "0"})
+        
+        # Round the width and height to integer pt strings for Playwright
+        page.pdf(
+            path=output_pdf,
+            width=f"{round(page_w)}pt",
+            height=f"{round(page_h)}pt",
+            margin={"top": "0", "right": "0", "bottom": "0", "left": "0"}
+        )
         browser.close()
 
     print(f"Done! Output saved to: {output_pdf}")
