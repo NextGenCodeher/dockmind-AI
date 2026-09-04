@@ -11,11 +11,10 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # -----------------------------------------------------------------------------
 # 1. TEMPLATE PARSER: Extracts HTML/CSS Layout Shell from Uploaded PDF
-# -----------------------------------------------------------------------------
 def extract_template_html_and_css(uploaded_file):
     """
     Parses the reference PDF to extract structural layout, page geometry,
-    font properties, margins, and column distribution into an HTML template shell.
+    font properties, precise margin calculations, and heading styles.
     """
     try:
         file_bytes = uploaded_file.read()
@@ -26,50 +25,69 @@ def extract_template_html_and_css(uploaded_file):
             return get_default_template()
 
         page = doc[0]
-        rect = page.rect
-        blocks = page.get_text("blocks")
-
-        # 1. Extract Margins
-        if blocks:
-            min_x = min(b[0] for b in blocks)
-            min_y = min(b[1] for b in blocks)
-            max_x = max(b[2] for b in blocks)
-            max_y = max(b[3] for b in blocks)
-
-            margin_left = f"{max(12, round(min_x, 1))}pt"
-            margin_top = f"{max(15, round(min_y, 1))}pt"
-            margin_right = f"{max(12, round(rect.width - max_x, 1))}pt"
-            margin_bottom = f"{max(15, round(rect.height - max_y, 1))}pt"
-        else:
-            margin_left, margin_top, margin_right, margin_bottom = "18mm", "18mm", "18mm", "18mm"
-
-        # 2. Detect Multi-Column Layout
-        x_centers = [b[0] for b in blocks if len(b) >= 4]
-        is_two_column = False
-        if x_centers:
-            midpoint = rect.width / 2
-            left = [x for x in x_centers if x < midpoint - 25]
-            right = [x for x in x_centers if x > midpoint + 25]
-            if len(left) > 0 and len(right) > 0:
-                is_two_column = True
-
-        column_css = "column-count: 2; column-gap: 18pt; column-fill: balance;" if is_two_column else "column-count: 1;"
-
-        # 3. Extract Font Family & Primary Color
-        font_family = "Times New Roman, serif"
-        primary_color = "#000000"
+        rect = page.rect # Total page dimensions (width, height)
         
-        dict_blocks = page.get_text("dict")["blocks"]
-        for b in dict_blocks:
+        # 1. Extract Spans with Font Sizes, Weights, Colors, and Coordinates
+        spans = []
+        page_dict = page.get_text("dict")
+        for b in page_dict.get("blocks", []):
             if "lines" in b:
                 for line in b["lines"]:
                     for span in line["spans"]:
-                        font_name = span.get("font", "")
-                        if font_name:
-                            font_family = font_name
-                        color_int = span.get("color", 0)
-                        if color_int > 0 and primary_color == "#000000":
-                            primary_color = f"#{color_int:06x}"
+                        text = span.get("text", "").strip()
+                        if text:
+                            # Convert integer color to HEX string
+                            color_int = span.get("color", 0)
+                            r = (color_int >> 16) & 255
+                            g = (color_int >> 8) & 255
+                            b_val = color_int & 255
+                            hex_color = f"#{r:02x}{g:02x}{b_val:02x}"
+                            
+                            spans.append({
+                                "text": text,
+                                "size": round(span.get("size", 10), 1),
+                                "font": span.get("font", "Times New Roman"),
+                                "color": hex_color,
+                                "bbox": span.get("bbox") # (x0, y0, x1, y1)
+                            })
+
+        if not spans:
+            return get_default_template()
+
+        # 2. Precise Page Margins (Bounding box around actual content)
+        min_x = min(s["bbox"][0] for s in spans)
+        min_y = min(s["bbox"][1] for s in spans)
+        max_x = max(s["bbox"][2] for s in spans)
+        max_y = max(s["bbox"][3] for s in spans)
+
+        margin_top = f"{max(10, round(min_y, 1))}pt"
+        margin_bottom = f"{max(10, round(rect.height - max_y, 1))}pt"
+        margin_left = f"{max(10, round(min_x, 1))}pt"
+        margin_right = f"{max(10, round(rect.width - max_x, 1))}pt"
+
+        # 3. Detect Dominant Font Family & Primary Text Color
+        fonts = [s["font"] for s in spans]
+        font_family = max(set(fonts), key=fonts.count) if fonts else "Times New Roman, serif"
+        
+        # Clean up font names (e.g., "ABCDE+Calibri-Bold" -> "Calibri")
+        font_clean = font_family.split("+")[-1].split("-")[0].replace(",", "")
+        
+        colors = [s["color"] for s in spans if s["color"] != "#ffffff"]
+        primary_color = max(set(colors), key=colors.count) if colors else "#000000"
+
+        # 4. Extract Title, Heading (H2), and Body Font Sizes
+        sorted_sizes = sorted(list(set(s["size"] for s in spans)), reverse=True)
+        title_size = f"{sorted_sizes[0]}pt" if len(sorted_sizes) > 0 else "18pt"
+        h2_size = f"{sorted_sizes[1]}pt" if len(sorted_sizes) > 1 else "12pt"
+        body_size = f"{sorted_sizes[-1]}pt" if len(sorted_sizes) > 2 else "10pt"
+
+        # 5. Detect Multi-Column Layout
+        midpoint = rect.width / 2
+        left_side = [s for s in spans if s["bbox"][2] < midpoint - 15]
+        right_side = [s for s in spans if s["bbox"][0] > midpoint + 15]
+        is_two_column = len(left_side) > 3 and len(right_side) > 3
+
+        column_css = "column-count: 2; column-gap: 16pt; column-fill: balance;" if is_two_column else "column-count: 1;"
 
         css = f"""
         @page {{
@@ -77,9 +95,9 @@ def extract_template_html_and_css(uploaded_file):
             margin: {margin_top} {margin_right} {margin_bottom} {margin_left};
         }}
         body {{
-            font-family: '{font_family}', 'Times New Roman', serif;
-            font-size: 10pt;
-            line-height: 1.4;
+            font-family: '{font_clean}', 'Times New Roman', serif;
+            font-size: {body_size};
+            line-height: 1.35;
             color: {primary_color};
             margin: 0;
             padding: 0;
@@ -88,21 +106,21 @@ def extract_template_html_and_css(uploaded_file):
         .header-container {{
             width: 100%;
             text-align: center;
-            margin-bottom: 16pt;
+            margin-bottom: 12pt;
         }}
         .header-container h1 {{
-            font-size: 18pt;
+            font-size: {title_size};
             font-weight: bold;
-            margin: 0 0 8pt 0;
-            line-height: 1.25;
+            margin: 0 0 6pt 0;
+            line-height: 1.2;
             color: {primary_color};
         }}
         .abstract-box {{
             text-align: justify;
-            font-size: 10pt;
-            margin: 10pt 0;
-            padding: 8pt 10pt;
-            background-color: #fcfcfc;
+            font-size: {body_size};
+            margin: 8pt 0;
+            padding: 6pt 8pt;
+            background-color: #f9f9f9;
             border-left: 3px solid {primary_color};
         }}
         .body-container {{
@@ -110,35 +128,33 @@ def extract_template_html_and_css(uploaded_file):
             text-align: justify;
         }}
         h2 {{
-            font-size: 11pt;
+            font-size: {h2_size};
             font-weight: bold;
             text-transform: uppercase;
             color: {primary_color};
             border-bottom: 1px solid {primary_color};
-            margin-top: 12pt;
+            margin-top: 10pt;
             margin-bottom: 4pt;
             padding-bottom: 2pt;
             break-after: avoid;
         }}
         h3 {{
-            font-size: 10pt;
+            font-size: {body_size};
             font-weight: bold;
             color: {primary_color};
-            margin-top: 8pt;
-            margin-bottom: 3pt;
+            margin-top: 6pt;
+            margin-bottom: 2pt;
             break-after: avoid;
         }}
         p {{
-            margin: 0 0 6pt 0;
-            text-indent: 10pt;
+            margin: 0 0 4pt 0;
         }}
         ul, ol {{
             margin: 0 0 6pt 0;
-            padding-left: 14pt;
+            padding-left: 12pt;
         }}
         li {{
-            margin-bottom: 3pt;
-            text-indent: 0;
+            margin-bottom: 2pt;
         }}
         """
 
