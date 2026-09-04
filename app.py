@@ -2,6 +2,7 @@ import fitz  # PyMuPDF
 from jinja2 import Template
 from playwright.sync_api import sync_playwright
 
+
 def parse_pdf_layout(input_pdf_path):
     doc = fitz.open(input_pdf_path)
     page = doc[0]
@@ -51,11 +52,14 @@ HTML_TEMPLATE_STRING = """
 <head>
 <meta charset="UTF-8">
 <style>
-  @page { size: {{ width }}pt {{ height }}pt; margin: 0; }
+  @page { 
+    size: {{ width }}px {{ height }}px; 
+    margin: 0; 
+  }
   body {
     position: relative;
-    width: {{ width }}pt;
-    height: {{ height }}pt;
+    width: {{ width }}px;
+    height: {{ height }}px;
     margin: 0;
     padding: 0;
     font-family: 'Times New Roman', serif;
@@ -66,28 +70,28 @@ HTML_TEMPLATE_STRING = """
 </style>
 </head>
 <body>
-  <div class="block" style="left: {{ layout.header.left }}pt; top: {{ layout.header.top }}pt; width: {{ layout.header.width }}pt; text-align: {{ layout.header.alignment }};">
+  <div class="block" style="left: {{ layout.header.left }}px; top: {{ layout.header.top }}px; width: {{ layout.header.width }}px; text-align: {{ layout.header.alignment }};">
     <b>{{ content.header }}</b>
   </div>
-  <div class="block" style="left: {{ layout.date.left }}pt; top: {{ layout.date.top }}pt; width: {{ layout.date.width }}pt; text-align: {{ layout.date.alignment }};">
+  <div class="block" style="left: {{ layout.date.left }}px; top: {{ layout.date.top }}px; width: {{ layout.date.width }}px; text-align: {{ layout.date.alignment }};">
     <b>Date:</b> {{ content.date }}
   </div>
-  <div class="block" style="left: {{ layout.address.left }}pt; top: {{ layout.address.top }}pt; width: {{ layout.address.width }}pt; text-align: {{ layout.address.alignment }};">
+  <div class="block" style="left: {{ layout.address.left }}px; top: {{ layout.address.top }}px; width: {{ layout.address.width }}px; text-align: {{ layout.address.alignment }};">
     <b>To,</b><br>
     {% for line in content.address %}{{ line }}<br>{% endfor %}
   </div>
-  <div class="block" style="left: {{ layout.subject.left }}pt; top: {{ layout.subject.top }}pt; width: {{ layout.subject.width }}pt; text-align: {{ layout.subject.alignment }};">
+  <div class="block" style="left: {{ layout.subject.left }}px; top: {{ layout.subject.top }}px; width: {{ layout.subject.width }}px; text-align: {{ layout.subject.alignment }};">
     <u><b>Subject: {{ content.subject }}</b></u>
   </div>
-  <div class="block" style="left: {{ layout.salutation.left }}pt; top: {{ layout.salutation.top }}pt; width: {{ layout.salutation.width }}pt; text-align: {{ layout.salutation.alignment }};">
+  <div class="block" style="left: {{ layout.salutation.left }}px; top: {{ layout.salutation.top }}px; width: {{ layout.salutation.width }}px; text-align: {{ layout.salutation.alignment }};">
     {{ content.salutation }},
   </div>
-  <div class="block" style="left: {{ layout.body.left }}pt; top: {{ layout.body.top }}pt; width: {{ layout.body.width }}pt; text-align: justify;">
+  <div class="block" style="left: {{ layout.body.left }}px; top: {{ layout.body.top }}px; width: {{ layout.body.width }}px; text-align: justify;">
     {% for p in content.paragraphs %}
       <p style="text-indent: 35px; margin-bottom: 12px;">{{ p }}</p>
     {% endfor %}
   </div>
-  <div class="block" style="left: {{ layout.closing.left }}pt; top: {{ layout.closing.top }}pt; width: {{ layout.closing.width }}pt; text-align: {{ layout.closing.alignment }};">
+  <div class="block" style="left: {{ layout.closing.left }}px; top: {{ layout.closing.top }}px; width: {{ layout.closing.width }}px; text-align: {{ layout.closing.alignment }};">
     Thanking you,<br>
     {{ content.sign_off }},<br><br><br>
     <b>{{ content.sender_name }}</b><br>
@@ -101,10 +105,14 @@ HTML_TEMPLATE_STRING = """
 def convert_pdf_template(input_pdf, content_data, output_pdf):
     layout_map, page_w, page_h = parse_pdf_layout(input_pdf)
 
+    # Convert to integer pixel values
+    w_px = round(page_w)
+    h_px = round(page_h)
+
     template = Template(HTML_TEMPLATE_STRING)
     rendered_html = template.render(
-        width=round(page_w),
-        height=round(page_h),
+        width=w_px,
+        height=h_px,
         layout=layout_map,
         content=content_data
     )
@@ -113,13 +121,13 @@ def convert_pdf_template(input_pdf, content_data, output_pdf):
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
         page.set_content(rendered_html)
-        
-        # Round the width and height to integer pt strings for Playwright
+
+        # Pass 'px' strings to Playwright page.pdf()
         page.pdf(
             path=output_pdf,
-            width=f"{round(page_w)}pt",
-            height=f"{round(page_h)}pt",
-            margin={"top": "0", "right": "0", "bottom": "0", "left": "0"}
+            width=f"{w_px}px",
+            height=f"{h_px}px",
+            margin={"top": "0px", "right": "0px", "bottom": "0px", "left": "0px"}
         )
         browser.close()
 
