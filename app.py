@@ -1,4 +1,5 @@
 import os
+import re
 import fitz  # PyMuPDF
 import streamlit as st
 from markdown import markdown
@@ -9,12 +10,12 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
 # -----------------------------------------------------------------------------
-# 1. TEMPLATE PARSER: Extracts HTML/CSS Layout from Uploaded Reference PDF
+# 1. TEMPLATE PARSER: Extracts HTML/CSS Layout Shell from Uploaded PDF
 # -----------------------------------------------------------------------------
 def extract_template_html_and_css(uploaded_file):
     """
     Parses the reference PDF to extract structural layout, page geometry,
-    font properties, margins, and column distribution. Returns an HTML template shell.
+    font properties, margins, and column distribution into an HTML template shell.
     """
     try:
         file_bytes = uploaded_file.read()
@@ -54,7 +55,7 @@ def extract_template_html_and_css(uploaded_file):
 
         column_css = "column-count: 2; column-gap: 18pt; column-fill: balance;" if is_two_column else "column-count: 1;"
 
-        # 3. Extract Font Family & Color
+        # 3. Extract Font Family & Primary Color
         font_family = "Times New Roman, serif"
         primary_color = "#000000"
         
@@ -141,7 +142,7 @@ def extract_template_html_and_css(uploaded_file):
         }}
         """
 
-        template_html = f"""<!DOCTYPE html>
+        return f"""<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
@@ -150,20 +151,15 @@ def extract_template_html_and_css(uploaded_file):
   </style>
 </head>
 <body>
-  <!-- HEADER SECTION -->
   <div class="header-container">
     {{{{TITLE}}}}
     {{{{ABSTRACT}}}}
   </div>
-
-  <!-- MAIN BODY CONTENT -->
   <div class="body-container">
     {{{{BODY_CONTENT}}}}
   </div>
 </body>
 </html>"""
-
-        return template_html
 
     except Exception as e:
         st.error(f"Error analyzing reference PDF template: {e}")
@@ -200,85 +196,119 @@ def get_default_template():
 
 
 # -----------------------------------------------------------------------------
-# 2. STREAMLIT APPLICATION
+# 2. CHAT CONTENT PARSER (Extracts Title, Abstract, Body from Single Input)
+# -----------------------------------------------------------------------------
+def parse_chat_content(user_message: str):
+    """
+    Parses a single prompt to isolate title, abstract, and body markdown.
+    """
+    title = ""
+    abstract = ""
+    body = user_message
+
+    # 1. Look for explicit Markdown Title (# Title) or Title: prefix
+    title_match = re.search(r"^(?:#\s+|(?:Title:\s*))([^\n]+)", user_message, re.IGNORECASE)
+    if title_match:
+        title = title_match.group(1).strip()
+        # Remove matched title line from body
+        body = user_message.replace(title_match.group(0), "", 1).strip()
+
+    # 2. Look for explicit Abstract section
+    abstract_match = re.search(r"Abstract:\s*([^\n]+(?:\n[^\n]+)*?)(?=\n\n|\n#|$)", body, re.IGNORECASE)
+    if abstract_match:
+        abstract = abstract_match.group(1).strip()
+        body = body.replace(abstract_match.group(0), "", 1).strip()
+
+    return title, abstract, body
+
+
+# -----------------------------------------------------------------------------
+# 3. STREAMLIT CHAT APPLICATION
 # -----------------------------------------------------------------------------
 def main():
-    st.set_page_config(page_title="DocMind AI - HTML Template Compiler", layout="wide")
-    st.title("📄 DocMind AI: PDF Template Parser & Compiler")
+    st.set_page_config(page_title="DocMind AI Chat Formatter", layout="wide")
+    st.title("💬 DocMind AI: Chat-Driven Document Compiler")
 
-    col1, col2 = st.columns([1, 1])
+    # Initialize chat history & template state
+    if "messages" not in st.session_state:
+        st.session_state.messages = [
+            {"role": "assistant", "content": "Upload your target reference PDF in the sidebar, then paste or type your document content directly into the chat below!"}
+        ]
+    if "template_html" not in st.session_state:
+        st.session_state.template_html = get_default_template()
 
-    with col1:
-        st.subheader("1. Upload Reference PDF Template")
-        uploaded_template = st.file_uploader("Upload Target Format Reference PDF", type=["pdf"])
+    # Sidebar for uploading the formatting template
+    with st.sidebar:
+        st.header("1. Upload Formatting Template")
+        uploaded_file = st.file_uploader("Upload Sample PDF Template", type=["pdf"])
+        if uploaded_file:
+            st.session_state.template_html = extract_template_html_and_css(uploaded_file)
+            st.success(f"Layout template extracted from `{uploaded_file.name}`")
+            
+        with st.expander("🔍 View Active HTML/CSS Shell"):
+            st.code(st.session_state.template_html, language="html")
 
-        if uploaded_template:
-            template_html = extract_template_html_and_css(uploaded_template)
-            st.success(f"Successfully Extracted Layout Template from `{uploaded_template.name}`")
-        else:
-            template_html = get_default_template()
-            st.info("Upload a reference PDF to extract its exact HTML/CSS structure.")
+    # Display Chat History
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if "pdf_path" in msg and os.path.exists(msg["pdf_path"]):
+                with open(msg["pdf_path"], "rb") as f:
+                    st.download_button(
+                        label="📥 Download Formatted PDF",
+                        data=f,
+                        file_name=os.path.basename(msg["pdf_path"]),
+                        mime="application/pdf",
+                        key=msg["pdf_path"]
+                    )
 
-        # Show extracted HTML/CSS code for review
-        with st.expander("🔍 View Extracted HTML/CSS Template Code"):
-            st.code(template_html, language="html")
+    # Single Chat Input
+    if prompt := st.chat_input("Type or paste your entire document content here..."):
+        # Record user message
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
 
-        st.subheader("2. Enter Your New Content")
-        
-        doc_title = st.text_input("Document Title", placeholder="e.g. DocMind AI Project Architecture")
-        
-        doc_abstract = st.text_area(
-            "Abstract / Subtitle / Header Meta", 
-            placeholder="e.g. Abstract or recipient info...", 
-            height=90
-        )
-        
-        user_content = st.text_area(
-            "Main Content (Markdown or Raw Text)", 
-            placeholder="""Enter your content here:
+        # Generate Assistant Response
+        with st.chat_message("assistant"):
+            with st.spinner("Synthesizing content into target PDF layout..."):
+                title, abstract, body_markdown = parse_chat_content(prompt)
+                
+                body_html = markdown(body_markdown) if body_markdown else ""
+                abstract_html = f'<div class="abstract-box"><strong>Abstract:</strong> {markdown(abstract)}</div>' if abstract else ""
+                title_html = f"<h1>{title}</h1>" if title else ""
 
-## 1. Introduction
-Write your content paragraphs...
+                final_html = st.session_state.template_html.replace("{{TITLE}}", title_html)\
+                                                           .replace("{{ABSTRACT}}", abstract_html)\
+                                                           .replace("{{BODY_CONTENT}}", body_html)
 
-## 2. Methodology
-* Point 1
-* Point 2""", 
-            height=300
-        )
+                pdf_filename = f"output/Document_{len(st.session_state.messages)}.pdf"
+                
+                # Render HTML to PDF
+                with sync_playwright() as p:
+                    browser = p.chromium.launch(headless=True)
+                    page = browser.new_page()
+                    page.set_content(final_html)
+                    page.pdf(path=pdf_filename, print_background=True, format="A4")
+                    browser.close()
 
-    with col2:
-        st.subheader("3. Rendered Output")
+                response_text = f"✅ **Document Formatted Successfully!**\n\nI parsed your content into the reference template structure."
+                st.markdown(response_text)
+                
+                with open(pdf_filename, "rb") as f:
+                    st.download_button(
+                        label="📥 Download Formatted PDF",
+                        data=f,
+                        file_name="Formatted_Document.pdf",
+                        mime="application/pdf"
+                    )
 
-        if st.button("Compile Content into PDF Template", type="primary"):
-            if not user_content and not doc_title:
-                st.warning("Please provide title or content to compile.")
-            else:
-                with st.spinner("Injecting content into extracted HTML template..."):
-                    # Process markdown into HTML tags
-                    body_html = markdown(user_content) if user_content else ""
-                    abstract_html = f'<div class="abstract-box">{markdown(doc_abstract)}</div>' if doc_abstract else ""
-                    title_html = f"<h1>{doc_title}</h1>" if doc_title else ""
-
-                    # Inject user content into extracted HTML template slots
-                    final_html = template_html.replace("{{TITLE}}", title_html)\
-                                              .replace("{{ABSTRACT}}", abstract_html)\
-                                              .replace("{{BODY_CONTENT}}", body_html)
-
-                    # Render PDF with Playwright engine
-                    output_path = "output/Formatted_Document.pdf"
-                    with sync_playwright() as p:
-                        browser = p.chromium.launch(headless=True)
-                        page = browser.new_page()
-                        page.set_content(final_html)
-                        page.pdf(path=output_path, print_background=True, format="A4")
-                        browser.close()
-
-                    st.success("Compilation Complete!")
-                    with open(output_path, "rb") as f:
-                        st.download_button("📥 Download Generated PDF", f, file_name="Formatted_Document.pdf", mime="application/pdf")
-
-                    with st.expander("🌐 View Synthesized HTML Code"):
-                        st.code(final_html, language="html")
+                # Save assistant response to history
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": response_text,
+                    "pdf_path": pdf_filename
+                })
 
 if __name__ == "__main__":
     main()
