@@ -1,24 +1,73 @@
+import os
+import re
+import subprocess
 import fitz  # PyMuPDF
 import streamlit as st
 
+# -----------------------------------------------------------------------------
+# PAGE CONFIGURATION
+# -----------------------------------------------------------------------------
+st.set_page_config(
+    page_title="DocMind AI: Dynamic LaTeX Document Compiler",
+    page_icon="📄",
+    layout="wide",
+)
 
-def extract_template_html_and_css(uploaded_file):
-    """
-    Parses the reference PDF to extract visual properties (fonts, colors,
-    geometry, vector lines, margins) and generates a dynamic HTML/CSS template.
-    """
+OUTPUT_DIR = "output"
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+
+# -----------------------------------------------------------------------------
+# DEFAULT LATEX TEMPLATE FALLBACK
+# -----------------------------------------------------------------------------
+def get_default_latex_template() -> str:
+    return r"""\documentclass[twocolumn,10pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[margin=18mm]{geometry}
+\usepackage{microtype}
+\usepackage{titlesec}
+\usepackage{abstract}
+\usepackage{hyperref}
+
+\titleformat{\section}{\large\bfseries\uppercase}{}{0pt}{}[\titlerule]
+\titleformat{\subsection}{\normalfont\bfseries}{}{0pt}{}
+
+\title{\textbf{{{TITLE}}}}
+\date{}
+
+\begin{document}
+
+\twocolumn[
+  \begin{maketitle}
+  \end{maketitle}
+  \begin{abstract}
+  \noindent {{ABSTRACT}}
+  \end{abstract}
+  \vspace{1.5em}
+]
+
+{{BODY_CONTENT}}
+
+\end{document}
+"""
+
+
+# -----------------------------------------------------------------------------
+# STEP 1: PARSE REFERENCE PDF & BUILD DYNAMIC LATEX TEMPLATE
+# -----------------------------------------------------------------------------
+def extract_latex_template_from_pdf(uploaded_file) -> str:
+    """Analyzes reference PDF geometry and typography to construct a LaTeX template shell."""
     try:
         file_bytes = uploaded_file.read()
         uploaded_file.seek(0)
         doc = fitz.open(stream=file_bytes, filetype="pdf")
 
         if len(doc) == 0:
-            return get_default_template()
+            return get_default_latex_template()
 
         page = doc[0]
-        rect = page.rect  # Total PDF page dimensions
+        rect = page.rect
 
-        # 1. Extract Spans and Analyze Typography/Colors
         spans = []
         page_dict = page.get_text("dict")
 
@@ -28,192 +77,286 @@ def extract_template_html_and_css(uploaded_file):
                     for span in line["spans"]:
                         text = span.get("text", "").strip()
                         if text:
-                            # Extract Hex Color from Integer
-                            color_int = span.get("color", 0)
-                            r = (color_int >> 16) & 255
-                            g = (color_int >> 8) & 255
-                            b_val = color_int & 255
-                            hex_color = f"#{r:02x}{g:02x}{b_val:02x}"
-
-                            # Clean Font Name (Remove embedded subsets like ABCDEF+FontName)
-                            raw_font = span.get("font", "Times New Roman")
-                            font_clean = raw_font.split("+")[-1].split("-")[0]
-
                             spans.append(
                                 {
                                     "text": text,
                                     "size": round(span.get("size", 10), 1),
-                                    "font": font_clean,
-                                    "color": hex_color,
-                                    "flags": span.get("flags", 0),  # Bold/Italic
                                     "bbox": span.get("bbox"),
                                 }
                             )
 
         if not spans:
-            return get_default_template()
+            return get_default_latex_template()
 
-        # 2. Extract Exact Page Margins from Bounding Box Boundaries
+        # Extract Bounding Margins
         min_x = min(s["bbox"][0] for s in spans)
         min_y = min(s["bbox"][1] for s in spans)
         max_x = max(s["bbox"][2] for s in spans)
         max_y = max(s["bbox"][3] for s in spans)
 
-        margin_top = f"{max(8, round(min_y, 1))}pt"
-        margin_bottom = f"{max(8, round(rect.height - max_y, 1))}pt"
-        margin_left = f"{max(8, round(min_x, 1))}pt"
-        margin_right = f"{max(8, round(rect.width - max_x, 1))}pt"
+        margin_top = f"{max(12, round(min_y * 0.35, 1))}mm"
+        margin_bottom = f"{max(12, round((rect.height - max_y) * 0.35, 1))}mm"
+        margin_left = f"{max(12, round(min_x * 0.35, 1))}mm"
+        margin_right = f"{max(12, round((rect.width - max_x) * 0.35, 1))}mm"
 
-        # 3. Detect Dominant Body Font & Primary Accent Color
-        font_counts = {}
-        color_counts = {}
-        for s in spans:
-            font_counts[s["font"]] = font_counts.get(s["font"], 0) + 1
-            if s["color"] != "#ffffff":
-                color_counts[s["color"]] = color_counts.get(s["color"], 0) + 1
-
-        primary_font = (
-            max(font_counts, key=font_counts.get)
-            if font_counts
-            else "Times New Roman"
-        )
-        primary_color = (
-            max(color_counts, key=color_counts.get)
-            if color_counts
-            else "#000000"
-        )
-
-        # 4. Extract Dynamic Font Hierarchy (Sizes for Title, Headings, Body)
-        sorted_sizes = sorted(
-            list(set(s["size"] for s in spans)), reverse=True
-        )
-
-        title_size = (
-            f"{sorted_sizes[0]}pt" if len(sorted_sizes) >= 1 else "18pt"
-        )
-        h2_size = f"{sorted_sizes[1]}pt" if len(sorted_sizes) >= 2 else "12pt"
-        body_size = f"{sorted_sizes[-1]}pt" if len(sorted_sizes) >= 3 else "9.5pt"
-
-        # 5. Detect Section Divider Lines (Vector Graphics / Drawings)
-        drawings = page.get_drawings()
-        has_heading_borders = False
-        for d in drawings:
-            # Check for horizontal line vectors near content
-            for item in d.get("items", []):
-                if item[0] == "l":  # Line
-                    p1, p2 = item[1], item[2]
-                    if abs(p1.y - p2.y) < 2 and abs(p1.x - p2.x) > 100:
-                        has_heading_borders = True
-                        break
-
-        border_style = (
-            f"border-bottom: 1px solid {primary_color};"
-            if has_heading_borders
-            else "border-bottom: none;"
-        )
-
-        # 6. Detect Multi-Column Layouts
+        # Detect Column Layout (1 Column vs 2 Column)
         midpoint = rect.width / 2
         left_spans = [s for s in spans if s["bbox"][2] < midpoint - 10]
         right_spans = [s for s in spans if s["bbox"][0] > midpoint + 10]
         is_two_column = len(left_spans) > 5 and len(right_spans) > 5
 
-        column_css = (
-            "column-count: 2; column-gap: 16pt; column-fill: balance;"
-            if is_two_column
-            else "column-count: 1;"
+        column_option = "twocolumn," if is_two_column else "onecolumn,"
+
+        # Detect Font Hierarchy
+        sorted_sizes = sorted(
+            list(set(s["size"] for s in spans)), reverse=True
         )
+        base_size = "10pt"
+        if sorted_sizes:
+            avg_body_size = sorted_sizes[-1]
+            if avg_body_size >= 11:
+                base_size = "11pt"
+            elif avg_body_size >= 12:
+                base_size = "12pt"
 
-        # 7. Build Dynamic Template CSS
-        css = f"""
-        @page {{
-            size: A4;
-            margin: {margin_top} {margin_right} {margin_bottom} {margin_left};
-        }}
-        body {{
-            font-family: '{primary_font}', 'Segoe UI', Arial, sans-serif;
-            font-size: {body_size};
-            line-height: 1.35;
-            color: {primary_color};
-            margin: 0;
-            padding: 0;
-            background: #ffffff;
-        }}
-        .header-container {{
-            width: 100%;
-            text-align: center;
-            margin-bottom: 10pt;
-        }}
-        .header-container h1 {{
-            font-size: {title_size};
-            font-weight: bold;
-            text-transform: uppercase;
-            margin: 0 0 4pt 0;
-            line-height: 1.2;
-            color: {primary_color};
-        }}
-        .abstract-box {{
-            text-align: justify;
-            font-size: {body_size};
-            margin: 6pt 0 10pt 0;
-            padding: 6pt;
-            background-color: #f8f9fa;
-            border-left: 3px solid {primary_color};
-        }}
-        .body-container {{
-            {column_css}
-            text-align: left;
-        }}
-        h2 {{
-            font-size: {h2_size};
-            font-weight: bold;
-            text-transform: uppercase;
-            color: {primary_color};
-            {border_style}
-            margin-top: 10pt;
-            margin-bottom: 4pt;
-            padding-bottom: 2pt;
-            break-after: avoid;
-        }}
-        h3 {{
-            font-size: {body_size};
-            font-weight: bold;
-            color: {primary_color};
-            margin-top: 6pt;
-            margin-bottom: 2pt;
-            break-after: avoid;
-        }}
-        p {{
-            margin: 0 0 4pt 0;
-        }}
-        ul, ol {{
-            margin: 0 0 6pt 0;
-            padding-left: 14pt;
-        }}
-        li {{
-            margin-bottom: 2pt;
-        }}
-        """
+        # Construct Dynamic LaTeX Template Shell
+        latex_template = rf"""\documentclass[{column_option}{base_size},a4paper]{{article}}
+\usepackage[utf8]{{inputenc}}
+\usepackage[top={margin_top},bottom={margin_bottom},left={margin_left},right={margin_right}]{{geometry}}
+\usepackage{{microtype}}
+\usepackage{{titlesec}}
+\usepackage{{abstract}}
+\usepackage{{hyperref}}
 
-        return f"""<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <style>
-{css}
-  </style>
-</head>
-<body>
-  <div class="header-container">
-    {{{{TITLE}}}}
-    {{{{ABSTRACT}}}}
-  </div>
-  <div class="body-container">
-    {{{{BODY_CONTENT}}}}
-  </div>
-</body>
-</html>"""
+\titleformat{{\section}}{{\large\bfseries\uppercase}}{{}}{{0pt}}{{}}[\titlerule]
+\titleformat{{\subsection}}{{\normalfont\bfseries}}{{}}{{0pt}}{{}}
+
+\title{{\textbf{{{{TITLE}}}}}}
+\date{{}}
+
+\begin{document}
+
+\twocolumn[
+  \begin{maketitle}
+  \end{maketitle}
+  \begin{abstract}
+  \noindent {{{{ABSTRACT}}}}
+  \end{abstract}
+  \vspace{{1.5em}}
+]
+
+{{{{BODY_CONTENT}}}}
+
+\end{document}
+"""
+        return latex_template
 
     except Exception as e:
-        st.error(f"Error analyzing reference PDF template: {e}")
-        return get_default_template()
+        st.error(f"Error parsing reference PDF template: {e}")
+        return get_default_latex_template()
+
+
+# -----------------------------------------------------------------------------
+# HELPER: MARKDOWN TO LATEX CONVERTER
+# -----------------------------------------------------------------------------
+def markdown_to_latex(text: str) -> str:
+    if not text:
+        return ""
+
+    # Escape raw special LaTeX characters
+    text = text.replace("&", r"\&").replace("%", r"\%").replace("$", r"\$")
+
+    # Headings
+    text = re.sub(r"^###\s+(.*$)", r"\\subsubsection*{\1}", text, flags=re.M)
+    text = re.sub(r"^##\s+(.*$)", r"\\subsection*{\1}", text, flags=re.M)
+    text = re.sub(r"^#\s+(.*$)", r"\\section*{\1}", text, flags=re.M)
+
+    # Bold & Italics
+    text = re.sub(r"\*\*(.*?)\*\*", r"\\textbf{\1}", text)
+    text = re.sub(r"\*(.*?)\*", r"\\italic{\1}", text)
+
+    # Bullet lists
+    lines = text.split("\n")
+    in_list = False
+    new_lines = []
+    for line in lines:
+        if line.strip().startswith("- ") or line.strip().startswith("* "):
+            item = line.strip()[2:]
+            if not in_list:
+                new_lines.append(r"\begin{itemize}")
+                in_list = True
+            new_lines.append(rf"  \item {item}")
+        else:
+            if in_list:
+                new_lines.append(r"\end{itemize}")
+                in_list = False
+            new_lines.append(line)
+
+    if in_list:
+        new_lines.append(r"\end{itemize}")
+
+    return "\n".join(new_lines)
+
+
+# -----------------------------------------------------------------------------
+# CHAT CONTENT PARSER
+# -----------------------------------------------------------------------------
+def parse_chat_content(user_message: str):
+    title = "Untitled Document"
+    abstract = ""
+    body = user_message
+
+    title_match = re.search(
+        r"^(?:#\s+|(?:Title:\s*))([^\n]+)", user_message, re.IGNORECASE
+    )
+    if title_match:
+        title = title_match.group(1).strip()
+        body = user_message.replace(title_match.group(0), "", 1).strip()
+
+    abstract_match = re.search(
+        r"Abstract:\s*([^\n]+(?:\n[^\n]+)*?)(?=\n\n|\n#|$)", body, re.IGNORECASE
+    )
+    if abstract_match:
+        abstract = abstract_match.group(1).strip()
+        body = body.replace(abstract_match.group(0), "", 1).strip()
+
+    return title, abstract, body
+
+
+# -----------------------------------------------------------------------------
+# LATEX PDF COMPILER (`pdflatex`)
+# -----------------------------------------------------------------------------
+def render_pdf_with_latex(latex_code: str, output_filename: str) -> bool:
+    try:
+        tex_filename = output_filename.replace(".pdf", ".tex")
+        with open(tex_filename, "w", encoding="utf-8") as f:
+            f.write(latex_code)
+
+        # Run pdflatex command
+        cmd = [
+            "pdflatex",
+            "-interaction=nonstopmode",
+            f"-output-directory={OUTPUT_DIR}",
+            tex_filename,
+        ]
+
+        result = subprocess.run(
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+        )
+
+        if result.returncode == 0 and os.path.exists(output_filename):
+            return True
+        else:
+            st.error(
+                "LaTeX Compilation Error. Please ensure special LaTeX characters are properly formatted."
+            )
+            return False
+
+    except Exception as e:
+        st.error(
+            f"Failed to execute pdflatex binary: {e}. Ensure `texlive-latex-base` is installed in packages.txt."
+        )
+        return False
+
+
+# -----------------------------------------------------------------------------
+# MAIN STREAMLIT APP
+# -----------------------------------------------------------------------------
+def main():
+    st.title("📄 DocMind AI: PDF Layout Extractor & LaTeX Compiler")
+
+    if "messages" not in st.session_state:
+        st.session_state.messages = [
+            {
+                "role": "assistant",
+                "content": "Step 1: Upload a sample reference PDF in the sidebar.\nStep 2: Type or paste your document text below in the chat to format it into PDF!",
+            }
+        ]
+
+    if "latex_template" not in st.session_state:
+        st.session_state.latex_template = get_default_latex_template()
+
+    # --- SIDEBAR: STEP 1 (UPLOAD & EXTRACT TEMPLATE) ---
+    with st.sidebar:
+        st.header("Step 1: Input Reference PDF")
+        uploaded_file = st.file_uploader(
+            "Upload Reference PDF Template", type=["pdf"]
+        )
+
+        if uploaded_file:
+            st.session_state.latex_template = extract_latex_template_from_pdf(
+                uploaded_file
+            )
+            st.success(
+                f"Extracted LaTeX structure from `{uploaded_file.name}`!"
+            )
+
+        with st.expander("🔍 View Generated LaTeX Shell"):
+            st.code(st.session_state.latex_template, language="latex")
+
+    # --- MAIN CHAT INTERFACE: STEP 2 (REPLACE CONTENT & COMPILE) ---
+    for msg in st.session_state.messages:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            if "pdf_path" in msg and os.path.exists(msg["pdf_path"]):
+                with open(msg["pdf_path"], "rb") as f:
+                    st.download_button(
+                        label="📥 Download Generated LaTeX PDF",
+                        data=f,
+                        file_name=os.path.basename(msg["pdf_path"]),
+                        mime="application/pdf",
+                        key=f"dl_{msg['pdf_path']}",
+                    )
+
+    if prompt := st.chat_input("Paste or type your new document content..."):
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        with st.chat_message("assistant"):
+            with st.spinner("Injecting text and compiling LaTeX PDF..."):
+                title, abstract, body_markdown = parse_chat_content(prompt)
+
+                title_latex = markdown_to_latex(title)
+                abstract_latex = markdown_to_latex(abstract)
+                body_latex = markdown_to_latex(body_markdown)
+
+                # Inject parsed chat content into the extracted LaTeX template placeholders
+                final_latex = (
+                    st.session_state.latex_template.replace(
+                        "{{TITLE}}", title_latex
+                    )
+                    .replace("{{ABSTRACT}}", abstract_latex)
+                    .replace("{{BODY_CONTENT}}", body_latex)
+                )
+
+                pdf_filename = os.path.join(
+                    OUTPUT_DIR,
+                    f"Formatted_Paper_{len(st.session_state.messages)}.pdf",
+                )
+
+                success = render_pdf_with_latex(final_latex, pdf_filename)
+
+                if success:
+                    response_text = "✅ **Document Formatted & Compiled via LaTeX Successfully!**"
+                    st.markdown(response_text)
+
+                    with open(pdf_filename, "rb") as f:
+                        st.download_button(
+                            label="📥 Download Generated LaTeX PDF",
+                            data=f,
+                            file_name="Formatted_Document.pdf",
+                            mime="application/pdf",
+                        )
+
+                    st.session_state.messages.append(
+                        {
+                            "role": "assistant",
+                            "content": response_text,
+                            "pdf_path": pdf_filename,
+                        }
+                    )
+
+
+if __name__ == "__main__":
+    main()
