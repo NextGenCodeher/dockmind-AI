@@ -1,57 +1,71 @@
-import streamlit as st
 import os
-from core.pdf_engine import (
-    convert_pdf_template_to_latex,
-    map_content_to_latex,
-    compile_tex_to_pdf
+import tempfile
+from google import genai
+import streamlit as st
+
+st.set_page_config(
+    page_title="PDF to LaTeX Converter", page_icon="📄", layout="centered"
 )
 
-st.set_page_config(page_title="DocMind AI - PDF Styler", layout="wide")
-st.title("📄 DocMind AI: Template-Driven PDF Generator")
+st.title("📄 PDF to LaTeX Converter")
+st.write(
+    "Upload a document or PDF to convert it into clean, compilable LaTeX code"
+    " using Gemini."
+)
 
-# Initialize session state for storing extracted LaTeX template
-if "latex_template" not in st.session_state:
-    st.session_state.latex_template = None
+# Initialize client using Streamlit secrets
+api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
 
-# Step 1: Upload Reference Template PDF
-st.header("Step 1: Upload Reference PDF Template")
-template_pdf = st.file_uploader("Upload target layout/template PDF", type=["pdf"])
+if not api_key:
+  st.error("Gemini API key not found. Please configure it in Streamlit Secrets.")
+else:
+  client = genai.Client(api_key=api_key)
 
-if template_pdf and st.button("Extract LaTeX Template"):
-    with st.spinner("Analyzing PDF visual layout and generating LaTeX template..."):
-        # Save temp template
-        temp_path = "temp_template.pdf"
-        with open(temp_path, "wb") as f:
-            f.write(template_pdf.getvalue())
-        
-        st.session_state.latex_template = convert_pdf_template_to_latex(temp_path)
-        st.success("LaTeX template extracted successfully!")
+  uploaded_file = st.file_uploader(
+      "Choose a PDF or text file", type=["pdf", "txt", "md"]
+  )
 
-# Show current LaTeX template code if extracted
-if st.session_state.latex_template:
-    with st.expander("Preview Extracted LaTeX Template Code"):
-        st.code(st.session_state.latex_template, language="latex")
+  if uploaded_file is not None:
+    with tempfile.NamedTemporaryFile(
+        delete=False, suffix=f".{uploaded_file.name.split('.')[-1]}"
+    ) as tmp_file:
+      tmp_file.write(uploaded_file.getvalue())
+      tmp_path = tmp_file.name
 
-    # Step 2: Provide Content
-    st.header("Step 2: Enter Content to Place in Template")
-    user_content = st.text_area("Paste raw notes or content here:", height=200)
+    if st.button("Convert to LaTeX"):
+      with st.spinner("Processing document layout with Gemini..."):
+        try:
+          gemini_file = client.files.upload(file=tmp_path)
 
-    if user_content and st.button("Generate Formatted Document"):
-        with st.spinner("Mapping content into template and compiling PDF..."):
-            # Step 2a: Map content into template
-            populated_tex = map_content_to_latex(user_content, st.session_state.latex_template)
-            
-            # Step 2b: Compile to PDF
-            pdf_path = compile_tex_to_pdf(populated_tex, output_basename="styled_document")
-            
-            if pdf_path and os.path.exists(pdf_path):
-                st.success("PDF generated successfully!")
-                with open(pdf_path, "rb") as f:
-                    st.download_button(
-                        label="📥 Download Output PDF",
-                        data=f.read(),
-                        file_name="styled_document.pdf",
-                        mime="application/pdf"
-                    )
-            else:
-                st.error("LaTeX compilation failed. Ensure pdflatex is installed on your system.")
+          prompt = """
+                    Convert the content of this document into valid, clean, and complete LaTeX code.
+                    Use an appropriate document class (like article), structure headings logically (\section, \subsection), 
+                    and format any mathematical expressions, tables, or lists correctly.
+                    Return ONLY the raw LaTeX code inside a markdown code block.
+                    """
+
+          response = client.models.generate_content(
+              model="gemini-3.6-flash", contents=[gemini_file, prompt]
+          )
+
+          latex_output = (
+              response.text.replace("```latex", "")
+              .replace("```", "")
+              .strip()
+          )
+
+          st.success("Conversion successful!")
+          st.code(latex_output, language="latex")
+
+          st.download_button(
+              label="Download .tex File",
+              data=latex_output,
+              file_name="output.tex",
+              mime="text/plain",
+          )
+
+        except Exception as e:
+          st.error(f"An error occurred: {e}")
+        finally:
+          if os.path.exists(tmp_path):
+            os.remove(tmp_path)
