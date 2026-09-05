@@ -37,12 +37,16 @@ else:
         try:
           gemini_file = client.files.upload(file=tmp_path)
 
-          prompt = """
-                    Convert the content of this document into valid, clean, and complete LaTeX code.
-                    Use an appropriate document class (like article), structure headings logically (\section, \subsection), 
-                    and format any mathematical expressions, tables, or lists correctly.
-                    Return ONLY the raw LaTeX code inside a markdown code block.
-                    """
+          prompt = prompt = """
+            You are an expert LaTeX typesetter and layout reconstruction specialist.
+            Analyze the visual geometry, spacing, margins, header alignment, and precise relative placement of elements in this document.
+            Recreate it in LaTeX with absolute fidelity using appropriate positioning tools (such as the 'geometry', 'fancyhdr', or 'textpos' packages if necessary).
+            
+            Requirements:
+            1. Preserve exact relative coordinates, text alignments (left, right, center), and vertical/horizontal spacing.
+            2. Match every visual block, line break, and block element to its exact corresponding location on the page.
+            3. Return ONLY the raw LaTeX code inside a markdown code block.
+            """
 
           response = client.models.generate_content(
               model="gemini-3.6-flash", contents=[gemini_file, prompt]
