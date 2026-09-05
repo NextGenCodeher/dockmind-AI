@@ -52,12 +52,15 @@ else:
             with open(tmp_path, "r", encoding="utf-8") as f:
               document_content = f.read()
 
-          prompt = f"""
-                    You are an expert LaTeX typesetter. 
-                    Convert the following extracted document text and structure into clean, complete, and compilable LaTeX code.
-                    Use an appropriate document class (like article), proper sectioning commands (\\section, \\subsection), 
-                    and format any lists or tables correctly.
-                    Return ONLY the raw LaTeX code inside a markdown code block.
+          prompt = prompt = f"""
+                    You are an expert LaTeX typesetter and designer. 
+                    Convert the following document text and structure into clean, compilable LaTeX code.
+                    
+                    Styling and Layout Requirements:
+                    1. Use the `geometry` package to define appropriate page margins matching standard document aesthetics.
+                    2. If the text indicates specific headings, colors, or callouts, use packages like `xcolor` to define and apply matching color schemes.
+                    3. Structure headings logically using \\section, \\subsection, and format tables/lists cleanly.
+                    4. Return ONLY the raw LaTeX code inside a markdown code block.
 
                     Document Content:
                     {document_content}
