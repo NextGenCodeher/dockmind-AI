@@ -1,19 +1,19 @@
 import os
 import tempfile
+from docx import Document
 from google import genai
 import streamlit as st
 
 st.set_page_config(
-    page_title="PDF to LaTeX Converter", page_icon="📄", layout="centered"
+    page_title="Word to LaTeX Converter", page_icon="📄", layout="centered"
 )
 
-st.title("📄 PDF to LaTeX Converter")
+st.title("📄 Word Document to LaTeX Converter")
 st.write(
-    "Upload a document or PDF to convert it into clean, compilable LaTeX code"
-    " using Gemini."
+    "Upload a Word document (.docx) to convert its structure cleanly into"
+    " LaTeX."
 )
 
-# Initialize client using Streamlit secrets
 api_key = st.secrets.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY")
 
 if not api_key:
@@ -22,7 +22,7 @@ else:
   client = genai.Client(api_key=api_key)
 
   uploaded_file = st.file_uploader(
-      "Choose a PDF or text file", type=["pdf", "txt", "md"]
+      "Choose a Word document", type=["docx", "txt"]
   )
 
   if uploaded_file is not None:
@@ -33,23 +33,38 @@ else:
       tmp_path = tmp_file.name
 
     if st.button("Convert to LaTeX"):
-      with st.spinner("Processing document layout with Gemini..."):
+      with st.spinner("Extracting structure and generating LaTeX..."):
         try:
-          gemini_file = client.files.upload(file=tmp_path)
+          document_content = ""
+          if uploaded_file.name.endswith(".docx"):
+            doc = Document(tmp_path)
+            # Extract paragraphs and tables sequentially
+            fullText = []
+            for para in doc.paragraphs:
+              if para.text.strip():
+                fullText.append(para.text)
+            for table in doc.tables:
+              for row in table.rows:
+                row_text = [cell.text.strip() for cell in row.cells]
+                fullText.append(" | ".join(row_text))
+            document_content = "\n".join(fullText)
+          else:
+            with open(tmp_path, "r", encoding="utf-8") as f:
+              document_content = f.read()
 
-          prompt = prompt = """
-            You are an expert LaTeX typesetter and layout reconstruction specialist.
-            Analyze the visual geometry, spacing, margins, header alignment, and precise relative placement of elements in this document.
-            Recreate it in LaTeX with absolute fidelity using appropriate positioning tools (such as the 'geometry', 'fancyhdr', or 'textpos' packages if necessary).
-            
-            Requirements:
-            1. Preserve exact relative coordinates, text alignments (left, right, center), and vertical/horizontal spacing.
-            2. Match every visual block, line break, and block element to its exact corresponding location on the page.
-            3. Return ONLY the raw LaTeX code inside a markdown code block.
-            """
+          prompt = f"""
+                    You are an expert LaTeX typesetter. 
+                    Convert the following extracted document text and structure into clean, complete, and compilable LaTeX code.
+                    Use an appropriate document class (like article), proper sectioning commands (\\section, \\subsection), 
+                    and format any lists or tables correctly.
+                    Return ONLY the raw LaTeX code inside a markdown code block.
+
+                    Document Content:
+                    {document_content}
+                    """
 
           response = client.models.generate_content(
-              model="gemini-3.6-flash", contents=[gemini_file, prompt]
+              model="gemini-3.6-flash", contents=prompt
           )
 
           latex_output = (
